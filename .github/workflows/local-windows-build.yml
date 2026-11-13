@@ -114,6 +114,8 @@ jobs:
             Set-Location $env:GITHUB_WORKSPACE
             foreach ($file in $files) { [IO.File]::WriteAllBytes((Join-Path $PWD $file), $fixed[$file]) }
           }
+          # The expected failing baseline leaves LASTEXITCODE=1 in PowerShell.
+          exit 0
 
       - name: Verify provider speed and handoff regressions
         shell: pwsh
