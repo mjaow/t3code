@@ -3649,7 +3649,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             waitForClose: true,
           }).pipe(Effect.forkScoped);
           yield* TestClock.adjust("0 millis");
-          assert.equal(Option.isNone(yield* Fiber.poll(unloading)), status === "unsubscribed");
+          assert.equal(unloading.pollUnsafe() === undefined, status === "unsubscribed");
           yield* TestClock.adjust("1 second");
           yield* Fiber.join(unloading);
         }).pipe(
