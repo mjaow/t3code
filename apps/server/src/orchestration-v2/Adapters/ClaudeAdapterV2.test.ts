@@ -3721,7 +3721,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         model: selection.model,
         options: [{ id: "fastMode", value: false }],
       });
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
   );
 
   it.effect("resumes the session a /clear selected after the Claude process is replaced", () =>

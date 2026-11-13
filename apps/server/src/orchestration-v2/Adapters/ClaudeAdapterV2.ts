@@ -12304,12 +12304,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       resultsReportingNewContextWindow.add(message);
                     }
                   }
-                  return Effect.gen(function* () {
-                    const speed = Reflect.get(message, "fast_mode_state");
-                    if (
-                      message.type === "system" &&
-                      (speed === "on" || speed === "off" || speed === "cooldown")
-                    ) {
+                  const speed =
+                    message.type === "system" ? Reflect.get(message, "fast_mode_state") : undefined;
+                  if (speed === "on" || speed === "off" || speed === "cooldown") {
+                    return Effect.gen(function* () {
                       const selection =
                         context.lastTurn?.input.modelSelection ?? turnInput.modelSelection;
                       const reported = {
@@ -12329,9 +12327,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         driver: CLAUDE_PROVIDER,
                         providerThread: { ...providerThread, updatedAt: yield* DateTime.now },
                       });
-                    }
-                    yield* handleSdkMessage({ query: querySession, message });
-                  });
+                      yield* handleSdkMessage({ query: querySession, message });
+                    });
+                  }
+                  return handleSdkMessage({ query: querySession, message });
                 }),
               ),
             ),

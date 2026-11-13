@@ -8691,7 +8691,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
   it.effect("reports backend speed fallback to the model selector", () =>
     Effect.gen(function* () {
-      const settings: CodexReplay.CodexAppServerReplayEntry = {
+      const settings = (tier: string | null): CodexReplay.CodexAppServerReplayEntry => ({
         type: "emit_inbound",
         frame: {
           method: "thread/settings/updated",
@@ -8700,7 +8700,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             threadSettings: {
               model: "gpt-5.4",
               effort: "low",
-              serviceTier: null,
+              serviceTier: tier,
               modelProvider: "openai",
               cwd: "/workspace",
               approvalPolicy: "never",
@@ -8710,15 +8710,31 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             },
           },
         },
-      };
-      const harness = yield* makeCodexReplayHarness({
-        ...resumeSubagentTranscript,
-        entries: resumeSubagentTranscript.entries.flatMap((entry) =>
-          entry.type === "emit_inbound" && entry.label === "turn/completed/root"
-            ? [settings, entry]
-            : [entry],
-        ),
       });
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario: "reported-speed",
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId: RESUME_NATIVE_THREAD,
+              nativeTurnId: RESUME_NATIVE_TURN,
+              prompt: RESUME_PROMPT,
+            }),
+            settings("priority"),
+            settings(null),
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: RESUME_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({ id: RESUME_NATIVE_TURN, status: "completed" }),
+                },
+              },
+            },
+          ],
+        }),
+      );
       yield* harness.runtime.startTurn(
         makeCodexTestTurnInput({
           threadId: harness.threadId,
@@ -8729,6 +8745,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }),
       );
       yield* harness.awaitTerminal(1);
+      assert.isTrue(
+        harness.events.some(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.nativeMetadata?.modelSelection?.options?.some(
+              (option) => option.id === "serviceTier" && option.value === "priority",
+            ),
+        ),
+      );
       const reported = harness.events.findLast(
         (event) =>
           event.type === "provider_thread.updated" &&
