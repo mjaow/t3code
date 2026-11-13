@@ -22,13 +22,17 @@ jobs:
       T3CODE_TELEMETRY_CHANNEL: dev
       T3CODE_DISABLE_AUTO_UPDATE: 'true'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Checkout source
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$GITHUB_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 -c submodule.recurse=false checkout --detach FETCH_HEAD
 
       - uses: ./.github/actions/setup-ci-deps
         with:
