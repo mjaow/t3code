@@ -1489,7 +1489,11 @@ function codexThreadRuntimeParams(input: {
 }
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
-  Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
+  Schema.Struct({
+    thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }),
+    model: Schema.optional(Schema.String),
+    serviceTier: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
 );
 
 const CodexChildSelection = Schema.Struct({
@@ -2125,6 +2129,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const turnTerminalizationPermit = yield* Semaphore.make(1);
         const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
+        const reportedSpeedSelections = new Map<string, ModelSelection>();
+        const rememberReportedSpeed = (
+          nativeThreadId: string,
+          model: string | undefined,
+          tier: string | null | undefined,
+        ) => {
+          if (!model || tier === undefined) return;
+          reportedSpeedSelections.set(nativeThreadId, {
+            instanceId: adapterOptions.instanceId,
+            model,
+            options: [{ id: "serviceTier", value: tier ?? "default" }],
+          });
+        };
+        const withReportedSpeed = (providerThread: OrchestrationV2ProviderThread) => {
+          const selection = reportedSpeedSelections.get(
+            providerThread.nativeThreadRef?.nativeId ?? "",
+          );
+          return selection === undefined
+            ? providerThread
+            : {
+                ...providerThread,
+                nativeMetadata: { ...providerThread.nativeMetadata, modelSelection: selection },
+              };
+        };
         const goalHolds = new Map<string, CodexGoalHold>();
         const continuedRuns = new Map<ProviderTurnId, Array<ActiveCodexTurnContext>>();
         const capacityContinuations = new Map<
@@ -2147,7 +2175,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           );
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
-          Queue.offer(events, event).pipe(Effect.asVoid);
+          Queue.offer(
+            events,
+            event.type === "provider_thread.updated"
+              ? { ...event, providerThread: withReportedSpeed(event.providerThread) }
+              : event,
+          ).pipe(Effect.asVoid);
 
         const promptSuggestionsEnabled = input.promptSuggestions ?? Effect.succeed(false);
         // Best effort: older Codex lacks thread/sample, and a sample fails once the user sends again.
@@ -4894,7 +4927,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
 
         yield* client.handleServerNotification("thread/settings/updated", (payload) =>
-          Effect.sync(() => reroutedThreads.delete(payload.threadId)).pipe(
+          Effect.gen(function* () {
+            reroutedThreads.delete(payload.threadId);
+            rememberReportedSpeed(
+              payload.threadId,
+              payload.threadSettings.model,
+              payload.threadSettings.serviceTier,
+            );
+            const providerThread = rootProviderThreads.get(payload.threadId);
+            if (providerThread !== undefined) {
+              yield* emitProviderEvent({
+                type: "provider_thread.updated",
+                driver: CODEX_PROVIDER,
+                providerThread: { ...providerThread, updatedAt: yield* DateTime.now },
+              });
+            }
+          }).pipe(
             Effect.andThen(
               updateSubagentSelection(
                 payload.threadId,
@@ -7676,16 +7724,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ),
               ),
-              Effect.map((response): OrchestrationV2ProviderThread =>
-                providerThreadFromCodexThread({
-                  appThreadId: threadInput.threadId,
-                  idAllocator,
-                  ownerNodeId: null,
-                  providerSessionId: input.providerSessionId,
-                  providerInstanceId: adapterOptions.instanceId,
-                  thread: response.thread,
-                }),
-              ),
+              Effect.map((response): OrchestrationV2ProviderThread => {
+                rememberReportedSpeed(response.thread.id, response.model, response.serviceTier);
+                return withReportedSpeed(
+                  providerThreadFromCodexThread({
+                    appThreadId: threadInput.threadId,
+                    idAllocator,
+                    ownerNodeId: null,
+                    providerSessionId: input.providerSessionId,
+                    providerInstanceId: adapterOptions.instanceId,
+                    thread: response.thread,
+                  }),
+                );
+              }),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterEnsureThreadError({
@@ -7716,7 +7767,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 Effect.andThen(resume),
                 Effect.flatMap(decodeCodexResumeMetadata),
               );
-              return {
+              rememberReportedSpeed(response.thread.id, response.model, response.serviceTier);
+              return withReportedSpeed({
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
@@ -7728,7 +7780,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 },
                 nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
-              } satisfies OrchestrationV2ProviderThread;
+              } satisfies OrchestrationV2ProviderThread);
             },
             (effect, threadInput) =>
               effect.pipe(

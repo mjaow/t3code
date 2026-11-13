@@ -8689,6 +8689,70 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("reports backend speed fallback to the model selector", () =>
+    Effect.gen(function* () {
+      const settings: CodexReplay.CodexAppServerReplayEntry = {
+        type: "emit_inbound",
+        frame: {
+          method: "thread/settings/updated",
+          params: {
+            threadId: RESUME_NATIVE_THREAD,
+            threadSettings: {
+              model: "gpt-5.4",
+              effort: "low",
+              serviceTier: null,
+              modelProvider: "openai",
+              cwd: "/workspace",
+              approvalPolicy: "never",
+              approvalsReviewer: "auto_review",
+              collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
+              sandboxPolicy: { type: "dangerFullAccess" },
+            },
+          },
+        },
+      };
+      const harness = yield* makeCodexReplayHarness({
+        ...resumeSubagentTranscript,
+        entries: resumeSubagentTranscript.entries.flatMap((entry) =>
+          entry.type === "emit_inbound" && entry.label === "turn/completed/root"
+            ? [settings, entry]
+            : [entry],
+        ),
+      });
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-reported-speed"),
+          text: RESUME_PROMPT,
+        }),
+      );
+      yield* harness.awaitTerminal(1);
+      const reported = harness.events.findLast(
+        (event) =>
+          event.type === "provider_thread.updated" &&
+          event.providerThread.nativeThreadRef?.nativeId === RESUME_NATIVE_THREAD,
+      );
+      assert.equal(reported?.type, "provider_thread.updated");
+      if (reported?.type === "provider_thread.updated") {
+        assert.deepEqual(reported.providerThread.nativeMetadata?.modelSelection?.options, [
+          { id: "serviceTier", value: "default" },
+        ]);
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect.each(["model/rerouted"] as const)(
     "keeps %s child metadata when an older lookup finishes later",
     (method) =>

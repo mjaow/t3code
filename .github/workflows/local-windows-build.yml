@@ -36,7 +36,7 @@ jobs:
 
       - uses: ./.github/actions/setup-ci-deps
         with:
-          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts... --filter=@t3tools/oxlint-plugin-t3code...
 
       - name: Verify speed regression baseline and changed-file checks
         shell: pwsh
@@ -85,6 +85,8 @@ jobs:
           vp test run src/provider/CodexProvider.test.ts src/provider/ClaudeModelCatalog.test.ts src/provider/ClaudeCapabilitiesProbe.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           vp test run src/provider/ProviderRegistry.test.ts -t 'unverified speed|reviving unverified|app-server account and model list'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          vp test run src/orchestration-v2/Adapters/CodexAdapterV2.test.ts src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts -t 'reports backend speed'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location
 

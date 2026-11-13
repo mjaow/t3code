@@ -5881,11 +5881,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const heldProposedPlansByToolUseId = new Map<string, string>();
         // /clear moves a live process to a new native session; persist that one so a reopen resumes it.
         const clearedNativeSessions = new Map<string, string>();
+        const reportedSpeedSelections = new Map<string, ModelSelection>();
         const runtimeContext = yield* Effect.context<never>();
         const runPromise = Effect.runPromiseWith(runtimeContext);
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) => {
           if (event.type === "provider_thread.updated") {
+            const selection = reportedSpeedSelections.get(
+              event.providerThread.nativeThreadRef?.nativeId ?? "",
+            );
+            if (selection !== undefined) {
+              event = {
+                ...event,
+                providerThread: {
+                  ...event.providerThread,
+                  nativeMetadata: {
+                    ...event.providerThread.nativeMetadata,
+                    modelSelection: selection,
+                  },
+                },
+              };
+            }
             const budget = pdfBudgets.get(event.providerThread.nativeThreadRef?.nativeId ?? "");
             if (budget !== undefined) {
               event = {
@@ -12288,7 +12304,34 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       resultsReportingNewContextWindow.add(message);
                     }
                   }
-                  return handleSdkMessage({ query: querySession, message });
+                  return Effect.gen(function* () {
+                    const speed = Reflect.get(message, "fast_mode_state");
+                    if (
+                      message.type === "system" &&
+                      (speed === "on" || speed === "off" || speed === "cooldown")
+                    ) {
+                      const selection =
+                        context.lastTurn?.input.modelSelection ?? turnInput.modelSelection;
+                      const reported = {
+                        instanceId: selection.instanceId,
+                        model: selection.model,
+                        options: [{ id: "fastMode", value: speed === "on" }],
+                      };
+                      reportedSpeedSelections.set(context.nativeThreadId, reported);
+                      if (message.session_id)
+                        reportedSpeedSelections.set(message.session_id, reported);
+                      const providerThread =
+                        (yield* Ref.get(lastProviderThreadByNativeThread)).get(
+                          context.nativeThreadId,
+                        ) ?? turnInput.providerThread;
+                      yield* emitProviderEvent({
+                        type: "provider_thread.updated",
+                        driver: CLAUDE_PROVIDER,
+                        providerThread: { ...providerThread, updatedAt: yield* DateTime.now },
+                      });
+                    }
+                    yield* handleSdkMessage({ query: querySession, message });
+                  });
                 }),
               ),
             ),

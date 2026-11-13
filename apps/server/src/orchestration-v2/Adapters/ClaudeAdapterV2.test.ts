@@ -3678,6 +3678,52 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
+  it.effect("reports backend speed changes and cooldown to the model selector", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const selection = {
+        ...CLAUDE_TEST_MODEL_SELECTION,
+        options: [{ id: "fastMode", value: true }],
+      };
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-reported-speed"),
+          text: "Check speed",
+          attachments: [],
+          modelSelection: selection,
+        }),
+      );
+      for (const speed of ["on", "off", "cooldown"] as const) {
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...wakeTurnInit,
+            fast_mode_state: speed,
+          }),
+        );
+      }
+      yield* harness.offerAndWait(turnOneResult);
+      yield* Queue.take(harness.terminalReceipts);
+      const reported = harness.events.flatMap((event) =>
+        event.type === "provider_thread.updated" &&
+        event.providerThread.nativeMetadata?.modelSelection
+          ? [event.providerThread.nativeMetadata.modelSelection]
+          : [],
+      );
+      assert.deepEqual(
+        reported.slice(0, 3).map((value) => value.options?.[0]?.value),
+        [true, false, false],
+      );
+      assert.deepEqual(reported.at(-1), {
+        instanceId: selection.instanceId,
+        model: selection.model,
+        options: [{ id: "fastMode", value: false }],
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("resumes the session a /clear selected after the Claude process is replaced", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarnessWithOptions({
