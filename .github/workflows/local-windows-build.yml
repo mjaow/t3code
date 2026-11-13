@@ -89,7 +89,33 @@ jobs:
           vp lint --report-unused-disable-directives @sourceFiles
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify provider speed regressions
+      - name: Verify provider handoff regression baseline
+        shell: pwsh
+        run: |
+          $baseline = 'c54d356b7060f03776ae71c20f8f48b78ae4ee86'
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the handoff baseline.' }
+          $files = @('apps/server/src/orchestration-v2/ProviderSessionManager.ts', 'apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts')
+          $fixed = @{}
+          foreach ($file in $files) { $fixed[$file] = [IO.File]::ReadAllBytes((Join-Path $PWD $file)) }
+          try {
+            foreach ($file in $files) {
+              git show "${baseline}:$file" | Set-Content $file -Encoding utf8
+              if ($LASTEXITCODE -ne 0) { throw "Could not load baseline $file." }
+            }
+            $report = Join-Path $env:RUNNER_TEMP 'handoff-regression.json'
+            Push-Location apps/server
+            vp test run src/orchestration-v2/ProviderSessionManager.test.ts src/orchestration-v2/Adapters/CodexAdapterV2.test.ts -t 'detaches threads independently|writer lock to close' --reporter=json --outputFile=$report
+            if ($LASTEXITCODE -eq 0) { throw 'The handoff regressions must fail before the fix.' }
+            if ((Get-Content $report -Raw | ConvertFrom-Json).numFailedTests -ne 3) {
+              throw 'Expected two retained-identity cases and one delayed writer-release case to fail.'
+            }
+          } finally {
+            Set-Location $env:GITHUB_WORKSPACE
+            foreach ($file in $files) { [IO.File]::WriteAllBytes((Join-Path $PWD $file), $fixed[$file]) }
+          }
+
+      - name: Verify provider speed and handoff regressions
         shell: pwsh
         run: |
           Push-Location packages/client-runtime
@@ -107,12 +133,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           vp test run src/orchestration-v2/Adapters/CodexAdapterV2.test.ts src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts -t 'reports backend speed'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          vp test run src/orchestration-v2/ProviderSessionManager.test.ts -t 'detaches threads independently|detach|detaching'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          vp test run src/orchestration-v2/Adapters/CodexAdapterV2.test.ts -t 'writer lock to close|thread/closed|thread already closed|after native thread closure'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location
 
       - name: Check provider speed types
         shell: pwsh
         run: |
-          vp run --filter t3 --filter @t3tools/shared --filter @t3tools/client-runtime typecheck
+          vp run --filter t3 --filter @t3tools/provider-core --filter @t3tools/shared --filter @t3tools/client-runtime typecheck
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify packaging regression and fix

@@ -3146,13 +3146,19 @@ export const layerWithOptions = (
                   "providerTurns",
                 ]),
               );
+              const providerThreads = new Map(
+                (Option.isSome(projection) ? projection.value.providerThreads : [])
+                  .filter((thread) => thread.providerSessionId === input.providerSessionId)
+                  .map((thread) => [thread.id, thread] as const),
+              );
+              // A provider switch can rebind the projection before this effect runs.
+              // Keep the native identity actually loaded by the session being detached.
+              const loadedThread = currentEntry.idleThreadUnloads.get(
+                input.threadId,
+              )?.providerThread;
+              if (loadedThread !== undefined) providerThreads.set(loadedThread.id, loadedThread);
+              detachedProviderThreads = [...providerThreads.values()];
               if (Option.isSome(projection)) {
-                const providerThreads = new Map(
-                  projection.value.providerThreads
-                    .filter((thread) => thread.providerSessionId === input.providerSessionId)
-                    .map((thread) => [thread.id, thread] as const),
-                );
-                detachedProviderThreads = [...providerThreads.values()];
                 const activeTurns = projection.value.providerTurns.filter(
                   (turn) => turn.status === "running" && providerThreads.has(turn.providerThreadId),
                 );
@@ -3271,7 +3277,7 @@ export const layerWithOptions = (
                     ) {
                       return;
                     }
-                    yield* unloadThread({ providerThread }).pipe(
+                    yield* unloadThread({ providerThread, waitForClose: true }).pipe(
                       Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
                       Effect.catchCause((cause) =>
                         Effect.logWarning("orchestration-v2.driver-session.detach-unload-failed", {

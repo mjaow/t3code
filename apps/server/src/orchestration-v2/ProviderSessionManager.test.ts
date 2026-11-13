@@ -4520,6 +4520,7 @@ it.effect.each([
           threadId: secondThreadId,
           providerSessionId,
           now,
+          nativeThreadId: "native-second",
         });
         const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
         yield* eventSink.write({
@@ -4659,7 +4660,7 @@ it.effect.each([
         yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
         yield* resumeSecondThread;
         assert.equal((yield* Ref.get(state)).resumeCount, ++resumeCount);
-        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, ["native-thread"]);
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, ["native-second"]);
         const subscribe = firstRuntime.subscribeEvents;
         assert.isDefined(subscribe);
         if (subscribe === undefined) return;
@@ -4683,7 +4684,29 @@ it.effect.each([
           ),
         );
 
+        // Selection changes rebind the projection before the old session's detach effect runs.
+        yield* eventSink.write({
+          events: [
+            {
+              id: yield* idAllocator.allocate.event({ threadId: secondThreadId }),
+              type: "provider-thread.updated",
+              threadId: secondThreadId,
+              driver: CODEX_DRIVER,
+              occurredAt: now,
+              payload: {
+                ...secondProviderThread,
+                providerSessionId: idAllocator.derive.providerSession({
+                  providerInstanceId: ProviderInstanceId.make("codex_personal"),
+                }),
+              },
+            },
+          ],
+        });
         yield* manager.detach({ providerSessionId, threadId: secondThreadId });
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, [
+          "native-second",
+          "native-second",
+        ]);
         yield* manager.open({
           threadId: secondThreadId,
           providerSessionId,
@@ -4693,7 +4716,10 @@ it.effect.each([
         yield* resumeSecondThread;
         assert.equal((yield* Ref.get(state)).resumeCount, ++resumeCount);
 
-        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, ["native-thread"]);
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, [
+          "native-second",
+          "native-second",
+        ]);
 
         const reloadCases = [
           {
@@ -4733,7 +4759,8 @@ it.effect.each([
         assert.equal((yield* Ref.get(state)).closeCount, 0);
         assert.equal((yield* Ref.get(state)).interruptCount, 1);
         assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, [
-          "native-thread",
+          "native-second",
+          "native-second",
           "native-thread",
         ]);
 

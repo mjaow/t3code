@@ -3608,6 +3608,63 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   );
 
   // regression: #33747 Codex refuses thread/resume until an unsubscribed thread finishes closing
+  it.effect.each(["unsubscribed", "notLoaded", "notSubscribed"] as const)(
+    "waits for the writer lock to close during handoff (%s)",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "handoff-thread";
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario: `handoff-${status}`,
+              entries: [
+                ...codexReplayPreamble({
+                  nativeThreadId,
+                  nativeTurnId: "unused-turn",
+                  prompt: "unused-prompt",
+                }).slice(0, 5),
+                {
+                  type: "expect_outbound",
+                  frame: {
+                    id: 3,
+                    method: "thread/unsubscribe",
+                    params: { threadId: nativeThreadId },
+                  },
+                },
+                { type: "emit_inbound", frame: { id: 3, result: { status } } },
+                ...(status === "unsubscribed"
+                  ? [
+                      {
+                        type: "emit_inbound" as const,
+                        afterMs: 1000,
+                        frame: { method: "thread/closed", params: { threadId: nativeThreadId } },
+                      },
+                    ]
+                  : []),
+              ],
+            }),
+          );
+          const unloading = yield* harness.runtime.unloadThread!({
+            providerThread: harness.providerThread,
+            waitForClose: true,
+          }).pipe(Effect.forkScoped);
+          yield* TestClock.adjust("0 millis");
+          assert.equal(Option.isNone(yield* Fiber.poll(unloading)), status === "unsubscribed");
+          yield* TestClock.adjust("1 second");
+          yield* Fiber.join(unloading);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect.each([
     { name: "waits for thread/closed after a closing error", closedFirst: false },
     { name: "retries at once when the thread already closed", closedFirst: true },

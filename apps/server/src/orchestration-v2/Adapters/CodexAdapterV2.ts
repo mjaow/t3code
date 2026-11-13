@@ -7951,10 +7951,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return;
               }
               // A resume may already wait on the pending entry; replacing it would strand that wait.
-              if (!threadClosings.has(nativeThreadId)) {
-                threadClosings.set(nativeThreadId, yield* Deferred.make<void>());
+              const previousClosing = threadClosings.get(nativeThreadId);
+              const closing = previousClosing ?? (yield* Deferred.make<void>());
+              threadClosings.set(nativeThreadId, closing);
+              const response = yield* client.request("thread/unsubscribe", {
+                threadId: nativeThreadId,
+              });
+              if (
+                response.status === "notLoaded" ||
+                (response.status === "notSubscribed" && previousClosing === undefined)
+              ) {
+                if (threadClosings.get(nativeThreadId) === closing)
+                  threadClosings.delete(nativeThreadId);
+                yield* Deferred.succeed(closing, undefined);
               }
-              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              // Another app-server cannot resume the same native thread until its writer exits.
+              if (unloadInput.waitForClose === true) yield* Deferred.await(closing);
             },
             (effect, unloadInput) =>
               effect.pipe(
