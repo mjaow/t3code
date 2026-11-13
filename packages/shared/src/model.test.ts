@@ -182,6 +182,35 @@ describe("provider-reported option display", () => {
     ],
   };
 
+  it.each([
+    { offered: "fast", applied: "priority" },
+    { offered: "priority", applied: "fast" },
+  ])(
+    "displays the backend's $applied tier using the offered $offered choice",
+    ({ offered, applied }) => {
+      const speedDescriptor = {
+        id: "serviceTier",
+        label: "Service Tier",
+        type: "select" as const,
+        currentValue: "default",
+        options: [
+          { id: "default", label: "Standard" },
+          { id: offered, label: "Fast" },
+        ],
+      };
+      const selected = { ...selection, options: [{ id: "serviceTier", value: "default" }] };
+      expect(
+        getProviderOptionCurrentLabel(speedDescriptor, selected, {
+          ...selection,
+          options: [{ id: "serviceTier", value: applied }],
+        }),
+      ).toBe("Fast");
+      expect(buildProviderOptionSelectionsFromDescriptors([speedDescriptor])).toEqual(
+        selected.options,
+      );
+    },
+  );
+
   it("shows explicit reports without adding a choice or a dispatch option", () => {
     expect(getProviderOptionCurrentLabel(descriptor, selection, reported)).toBe("Default");
     expect(

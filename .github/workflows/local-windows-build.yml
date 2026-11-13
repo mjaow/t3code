@@ -38,6 +38,38 @@ jobs:
         with:
           install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
 
+      - name: Verify speed regression baseline and changed-file checks
+        shell: pwsh
+        run: |
+          $baseline = 'd7798c0c620e1035f4159c5b8927cacefe174eb9'
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin $baseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the speed regression baseline.' }
+          $files = @('packages/shared/src/model.ts', 'packages/client-runtime/src/modelTraits.ts')
+          $fixed = @{}
+          foreach ($file in $files) { $fixed[$file] = [IO.File]::ReadAllBytes((Join-Path $PWD $file)) }
+          try {
+            foreach ($file in $files) {
+              git show "${baseline}:$file" | Set-Content $file -Encoding utf8
+              if ($LASTEXITCODE -ne 0) { throw "Could not load baseline $file." }
+            }
+            $report = Join-Path $env:RUNNER_TEMP 'speed-regression.json'
+            Push-Location packages/client-runtime
+            vp test run src/modelTraits.test.ts -t 'uses the backend' --reporter=json --outputFile=$report
+            if ($LASTEXITCODE -eq 0) { throw 'The speed regressions must fail before the fix.' }
+            if ((Get-Content $report -Raw | ConvertFrom-Json).numFailedTests -ne 2) {
+              throw 'Expected both backend speed regressions to fail.'
+            }
+          } finally {
+            Set-Location $env:GITHUB_WORKSPACE
+            foreach ($file in $files) { [IO.File]::WriteAllBytes((Join-Path $PWD $file), $fixed[$file]) }
+          }
+          $changed = @(git diff --name-only $baseline HEAD)
+          vp fmt --check @changed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sourceFiles = @($changed | Where-Object { $_ -match '\.tsx?$' })
+          vp lint --report-unused-disable-directives @sourceFiles
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify provider speed regressions
         shell: pwsh
         run: |
