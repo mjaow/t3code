@@ -63,6 +63,25 @@ jobs:
             Set-Location $env:GITHUB_WORKSPACE
             foreach ($file in $files) { [IO.File]::WriteAllBytes((Join-Path $PWD $file), $fixed[$file]) }
           }
+          $claudeBaseline = '552fe1dae3f93f837bf92ca0065e402887a3ab0b'
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin $claudeBaseline
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the Claude Fast probe baseline.' }
+          $claudeSource = Join-Path $PWD 'apps/server/src/provider/ClaudeProvider.ts'
+          $claudeFixed = [IO.File]::ReadAllBytes($claudeSource)
+          try {
+            git show "${claudeBaseline}:apps/server/src/provider/ClaudeProvider.ts" | Set-Content $claudeSource -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw 'Could not load the Claude Fast probe baseline.' }
+            $report = Join-Path $env:RUNNER_TEMP 'claude-fast-probe-regression.json'
+            Push-Location apps/server
+            vp test run src/provider/ClaudeCapabilitiesProbe.test.ts -t 'Fast disabled' --reporter=json --outputFile=$report
+            if ($LASTEXITCODE -eq 0) { throw 'The Claude Fast opt-in regression must fail before the fix.' }
+            if ((Get-Content $report -Raw | ConvertFrom-Json).numFailedTests -ne 1) {
+              throw 'Expected only the accepted Fast opt-in case to fail.'
+            }
+          } finally {
+            Set-Location $env:GITHUB_WORKSPACE
+            [IO.File]::WriteAllBytes($claudeSource, $claudeFixed)
+          }
           $changed = @(git diff --name-only $baseline HEAD)
           vp fmt --check @changed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
