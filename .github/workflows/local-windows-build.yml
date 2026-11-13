@@ -40,22 +40,27 @@ jobs:
 
       - name: Verify packaging regression and fix
         shell: pwsh
+        working-directory: scripts
         run: |
-          $source = 'scripts/build-desktop-artifact.ts'
+          $source = Join-Path $PWD 'build-desktop-artifact.ts'
           $fixed = [IO.File]::ReadAllBytes($source)
           try {
             git fetch --no-tags --no-recurse-submodules --depth=1 origin 589416fff07ad2668417c0a919786f2e32d362bd
             if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the regression baseline.' }
-            git show 589416fff07ad2668417c0a919786f2e32d362bd:$source | Set-Content $source -Encoding utf8
+            git show 589416fff07ad2668417c0a919786f2e32d362bd:scripts/build-desktop-artifact.ts | Set-Content $source -Encoding utf8
             if ($LASTEXITCODE -ne 0) { throw 'Could not load the regression baseline.' }
-            vp test run scripts/build-desktop-artifact.test.ts -t 'unpacks target Windows natives'
+            $report = Join-Path $env:RUNNER_TEMP 'packaging-regression.json'
+            vp test run --config ../vite.config.ts build-desktop-artifact.test.ts -t 'unpacks target Windows natives' --reporter=json --outputFile=$report
             if ($LASTEXITCODE -eq 0) { throw 'The regression must fail before the fix.' }
+            if ((Get-Content $report -Raw | ConvertFrom-Json).numFailedTests -ne 1) {
+              throw 'Expected one failing regression assertion.'
+            }
           } finally {
             [IO.File]::WriteAllBytes($source, $fixed)
           }
-          vp test run scripts/build-desktop-artifact.test.ts
+          vp test run --config ../vite.config.ts build-desktop-artifact.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          vp fmt --check scripts/build-desktop-artifact.ts scripts/build-desktop-artifact.test.ts
+          vp fmt --check build-desktop-artifact.ts build-desktop-artifact.test.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows desktop archive
