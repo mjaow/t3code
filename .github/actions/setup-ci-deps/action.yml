@@ -48,7 +48,11 @@ runs:
       if: steps.vp_cache.outputs.cache-hit == 'true'
       shell: bash
       run: |
-        echo "$HOME/.vite-plus/bin" >> "$GITHUB_PATH"
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          cygpath -w "$HOME/.vite-plus/bin" >> "$GITHUB_PATH"
+        else
+          echo "$HOME/.vite-plus/bin" >> "$GITHUB_PATH"
+        fi
         "$HOME/.vite-plus/bin/vp" env use "${{ steps.vp.outputs.node }}"
 
     # vp gives each Node.js download attempt 10 minutes by default, so one
