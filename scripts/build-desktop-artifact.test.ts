@@ -748,6 +748,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
         const sourceDir = path.join(tempDir, "server");
         const nativeFiles = [
+          "node_modules/node-pty/build/Release/conpty/OpenConsole.exe",
+          "node_modules/node-pty/build/Debug/conpty/OpenConsole.exe",
+          "node_modules/node-pty/build/Debug/conpty.node",
+          "node_modules/@yuuang/ffi-rs-win32-ia32-msvc/ffi.node",
+          "node_modules/@yuuang/ffi-rs-win32-x64-msvc/ffi.node",
           "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
           "node_modules/node-pty/prebuilds/win32-arm64/conpty/OpenConsole.exe",
           "node_modules/node-pty/third_party/conpty/1.0.0/win10-x64/OpenConsole.exe",
@@ -765,6 +770,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const asarPath = path.join(tempDir, "server.asar");
         yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
         const unpackedRoot = `${asarPath}.unpacked`;
+
+        for (const kept of [
+          "node_modules/node-pty/build/Debug/conpty/OpenConsole.exe",
+          "node_modules/node-pty/build/Debug/conpty.node",
+          "node_modules/@yuuang/ffi-rs-win32-x64-msvc/ffi.node",
+        ]) {
+          assert.isTrue(yield* fs.exists(path.join(unpackedRoot, kept)), kept);
+        }
+        for (const excluded of [
+          "node_modules/node-pty/build/Release/conpty/OpenConsole.exe",
+          "node_modules/node-pty/third_party/conpty/1.0.0/win10-x64/OpenConsole.exe",
+          "node_modules/@yuuang/ffi-rs-win32-ia32-msvc/ffi.node",
+        ]) {
+          assert.isFalse(yield* fs.exists(path.join(unpackedRoot, excluded)), excluded);
+        }
 
         assert.isTrue(
           yield* fs.exists(

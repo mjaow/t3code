@@ -988,6 +988,11 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!**/node_modules/@cursor/sdk-*/**/*",
   "!apps/desktop/prod-resources/cursor-sdk",
   "!apps/desktop/prod-resources/cursor-sdk/**/*",
+  // The monitor is shipped once through extraResources and resolved from resourcesPath.
+  "!apps/desktop/resources/resource-monitor",
+  "!apps/desktop/resources/resource-monitor/**/*",
+  "!apps/desktop/prod-resources/resource-monitor",
+  "!apps/desktop/prod-resources/resource-monitor/**/*",
   // The installed Claude CLI is supplied explicitly; exclude optional bundled executables, retaining SDK JavaScript.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
   "!**/*.map",
@@ -1012,6 +1017,13 @@ export const MAC_FILE_EXCLUSIONS = [
 export const LINUX_FILE_EXCLUSIONS = [
   ...MAC_FILE_EXCLUSIONS,
   "!**/node_modules/node-pty/prebuilds/darwin-*/**/*",
+] as const;
+
+const WINDOWS_FILE_EXCLUSIONS = [
+  // These loaders use the native binaries staged beside index.js.
+  "!**/node_modules/@clerk/electron-passkeys-win32-*/**/*",
+  "!**/node_modules/@napi-rs/keyring-win32-*/**/*",
+  "!**/node_modules/@yuuang/ffi-rs-win32-ia32-msvc/**/*",
 ] as const;
 
 // Native packages (node-pty, objc-js) ship prebuilds for both Darwin architectures; only universal
@@ -1044,20 +1056,22 @@ export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
   "**/node_modules/.bin",
   "**/node_modules/.bin/**",
+  "**/node_modules/@yuuang/ffi-rs-win32-ia32-msvc",
+  "**/node_modules/@yuuang/ffi-rs-win32-ia32-msvc/**",
+  // Build inputs; ConPTY loads the copy beside the selected conpty.node binary.
+  "**/node_modules/node-pty/third_party/conpty",
+  "**/node_modules/node-pty/third_party/conpty/**",
   "**/*.map",
 ] as const;
 
 export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type) {
   const unusedArch = arch === "arm64" ? "x64" : "arm64";
   const unusedPrebuild = `**/node_modules/node-pty/prebuilds/win32-${unusedArch}`;
-  const unusedConpty = `**/node_modules/node-pty/third_party/conpty/*/win10-${unusedArch}`;
 
   return [
     ...WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
     unusedPrebuild,
     `${unusedPrebuild}/**`,
-    unusedConpty,
-    `${unusedConpty}/**`,
   ];
 }
 
@@ -2791,7 +2805,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         ? resolveMacFileExclusions(arch)
         : platform === "linux"
           ? LINUX_FILE_EXCLUSIONS
-          : []),
+          : WINDOWS_FILE_EXCLUSIONS),
     ],
     directories: {
       buildResources: "apps/desktop/resources",
@@ -3047,6 +3061,15 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
   const path = yield* Path.Path;
   // Unpack/sign only Windows PE addons; packages also carry foreign prebuilds that Authenticode cannot sign.
   const unpackGlobs: string[] = [...WINDOWS_SERVER_ASAR_UNPACK_GLOBS];
+  const ignoreGlobs = resolveWindowsServerAsarIgnoreGlobs(input.arch);
+  // node-pty's install can copy ConPTY into build/Release even when using a prebuild.
+  // Preserve the DLLs for source builds, but omit orphan copies with no adjacent addon.
+  for (const buildType of ["Release", "Debug"]) {
+    const buildDir = `node_modules/node-pty/build/${buildType}`;
+    if (!(yield* fs.exists(path.join(input.sourceDir, buildDir, "conpty.node")))) {
+      ignoreGlobs.push(`**/${buildDir}/conpty`, `**/${buildDir}/conpty/**`);
+    }
+  }
   for (const entry of yield* fs.readDirectory(input.sourceDir, { recursive: true })) {
     if (!entry.endsWith(".node")) continue;
     const addonPath = path.join(input.sourceDir, entry);
@@ -3071,7 +3094,7 @@ export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function
         // glob 13 (@electron/asar 4) resolves ignores against cwd; anchor them at the source.
         globOptions: {
           cwd: input.sourceDir,
-          ignore: resolveWindowsServerAsarIgnoreGlobs(input.arch),
+          ignore: ignoreGlobs,
         },
       }),
     catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
