@@ -3614,6 +3614,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const nativeThreadId = "handoff-thread";
+          const closeScheduled = yield* Deferred.make<void>();
+          let closed = false;
           const harness = yield* makeCodexReplayHarness(
             makeCodexReplayTranscript({
               scenario: `handoff-${status}`,
@@ -3636,6 +3638,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   ? [
                       {
                         type: "emit_inbound" as const,
+                        label: "handoff closed",
                         afterMs: 1000,
                         frame: { method: "thread/closed", params: { threadId: nativeThreadId } },
                       },
@@ -3643,15 +3646,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   : []),
               ],
             }),
+            undefined,
+            undefined,
+            undefined,
+            (entry) =>
+              entry.label === "handoff closed"
+                ? Deferred.succeed(closeScheduled, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            undefined,
+            undefined,
+            (method) =>
+              Effect.sync(() => {
+                if (method === "thread/closed") closed = true;
+              }),
           );
           const unloading = yield* harness.runtime.unloadThread!({
             providerThread: harness.providerThread,
             waitForClose: true,
-          }).pipe(Effect.forkScoped);
-          yield* TestClock.adjust("0 millis");
-          assert.equal(unloading.pollUnsafe() === undefined, status === "unsubscribed");
-          yield* TestClock.adjust("1 second");
-          yield* Fiber.join(unloading);
+          }).pipe(
+            Effect.map(() => closed),
+            Effect.forkScoped,
+          );
+          if (status === "unsubscribed") {
+            yield* Deferred.await(closeScheduled);
+            yield* TestClock.adjust("1 second");
+          }
+          assert.equal(yield* Fiber.join(unloading), status === "unsubscribed");
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
