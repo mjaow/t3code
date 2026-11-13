@@ -173,6 +173,41 @@ function stripClaudeContextWindowSuffix(value: string): string {
   return value.replace(/\[[^\]]*\]$/, "").trim();
 }
 
+export function applyClaudeFastModeAvailability(
+  models: ReadonlyArray<ServerProviderModel>,
+  reported: ReadonlyArray<ClaudeModelInfo> | undefined,
+  available = false,
+): ReadonlyArray<ServerProviderModel> {
+  const supported = new Set(
+    (reported ?? []).flatMap((info) =>
+      info.supportsFastMode === true
+        ? [info.value, info.resolvedModel ?? ""].map((id) =>
+            stripClaudeContextWindowSuffix(id).toLowerCase(),
+          )
+        : [],
+    ),
+  );
+  return models.map((model) => {
+    const descriptors = (model.capabilities?.optionDescriptors ?? []).filter(
+      (option) => option.id !== "fastMode",
+    );
+    const canUseFast =
+      available &&
+      [model.slug, ...(model.aliases ?? [])].some((id) =>
+        supported.has(stripClaudeContextWindowSuffix(id).toLowerCase()),
+      );
+    return {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        optionDescriptors: canUseFast
+          ? [...descriptors, { id: "fastMode", label: "Fast Mode", type: "boolean" as const }]
+          : descriptors,
+      },
+    };
+  });
+}
+
 export function claudeReportedModels(
   catalog: ClaudeModelCatalog,
   customModels: ReadonlyArray<CustomModelSetting>,

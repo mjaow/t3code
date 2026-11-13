@@ -204,7 +204,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
                         workspaceId === capabilities.workspaceId
                           ? Effect.succeed({
                               _tag: "fallback" as const,
-                              capabilities: withoutUsage(capabilities),
+                              capabilities: {
+                                ...withoutUsage(capabilities),
+                                fastModeAvailable: false,
+                              },
                             })
                           : Effect.fail(error),
                       ),

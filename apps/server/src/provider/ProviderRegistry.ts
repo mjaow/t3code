@@ -251,6 +251,18 @@ const mergeProviderModels = (
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
+  // Cached speed options cannot confirm this account's current entitlement.
+  if (provider.driver === "codex" || provider.driver === "claudeAgent") {
+    previousModels = previousModels.map((model) => ({
+      ...model,
+      capabilities: model.capabilities && {
+        ...model.capabilities,
+        optionDescriptors: (model.capabilities.optionDescriptors ?? []).filter(
+          (option) => option.id !== "fastMode" && option.id !== "serviceTier",
+        ),
+      },
+    }));
+  }
   const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
   const updateRequiredSlugs = new Set(provider.updateRequiredModels?.map((model) => model.slug));
   const retainablePreviousModels = previousModels.filter(

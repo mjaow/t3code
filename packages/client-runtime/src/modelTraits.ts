@@ -124,7 +124,14 @@ export function buildTraitsTriggerDisplay(input: {
   const labels: Array<string> = [];
   for (const descriptor of input.descriptors) {
     if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
-      speedLabel = descriptor.currentValue === true ? "Fast" : null;
+      speedLabel =
+        getProviderOptionCurrentValue(
+          descriptor,
+          input.modelSelection,
+          input.reportedModelSelection,
+        ) === true
+          ? "Fast"
+          : null;
       fastModeFallbackLabel = speedLabel ?? "Normal";
       continue;
     }
@@ -136,7 +143,11 @@ export function buildTraitsTriggerDisplay(input: {
       continue;
     }
     if (descriptor.id === "serviceTier" && descriptor.type === "select") {
-      const currentValue = getProviderOptionCurrentValue(descriptor);
+      const currentValue = getProviderOptionCurrentValue(
+        descriptor,
+        input.modelSelection,
+        input.reportedModelSelection,
+      );
       const fastTier = descriptor.options.find(({ label }) => label === "Fast");
       const ultrafastTier = descriptor.options.find(({ label }) => label === "Ultrafast");
       if (

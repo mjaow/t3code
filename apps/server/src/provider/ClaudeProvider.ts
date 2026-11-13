@@ -60,6 +60,7 @@ import {
 } from "./claudeUsageLimits.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
+  applyClaudeFastModeAvailability,
   CLAUDE_EFFORT_LEVELS,
   capClaudeCatalogEffort,
   type ClaudeEffortCapSource,
@@ -274,6 +275,7 @@ export type ClaudeCapabilitiesProbe = {
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
   readonly models?: ReadonlyArray<ClaudeModelInfo>;
+  readonly fastModeAvailable?: boolean;
   /** Undefined means get_usage failed; absent windows on success mean no subscription windows, as with API keys. */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
   readonly usageCheckedAt?: string;
@@ -537,6 +539,10 @@ const probeClaudeCapabilities = (
               readonly apiProvider?: string;
             }
           | undefined;
+        const speed = init as {
+          readonly fast_mode_state?: unknown;
+          readonly fast_mode_disabled_reason?: unknown;
+        };
         return {
           email: account?.email,
           subscriptionType: account?.subscriptionType,
@@ -545,6 +551,9 @@ const probeClaudeCapabilities = (
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
           ...(init.models?.length ? { models: init.models } : {}),
+          fastModeAvailable:
+            (speed.fast_mode_state === "on" || speed.fast_mode_state === "off") &&
+            speed.fast_mode_disabled_reason == null,
           ...(usage ? { usage, usageCheckedAt } : {}),
           ...(effortCapSources ? { effortCapSources } : {}),
         } satisfies ClaudeCapabilitiesProbe;
@@ -628,9 +637,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const allModels = claudeProviderModels(
-    modelCatalog.models.map((entry) => entry.model),
-    claudeSettings.customModels,
+  const allModels = applyClaudeFastModeAvailability(
+    claudeProviderModels(
+      modelCatalog.models.map((entry) => entry.model),
+      claudeSettings.customModels,
+    ),
+    undefined,
   );
 
   if (!claudeSettings.enabled) {
@@ -733,16 +745,20 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     probeResult && Result.isSuccess(probeResult) ? probeResult.success : undefined;
   const probeFailure =
     probeResult && Result.isFailure(probeResult) ? probeResult.failure : undefined;
-  const models = capClaudeCatalogEffort(
-    modelCatalog,
-    claudeProviderModels(
-      [
-        ...resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
-        ...claudeReportedModels(modelCatalog, claudeSettings.customModels, capabilities?.models),
-      ],
-      claudeSettings.customModels,
+  const models = applyClaudeFastModeAvailability(
+    capClaudeCatalogEffort(
+      modelCatalog,
+      claudeProviderModels(
+        [
+          ...resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
+          ...claudeReportedModels(modelCatalog, claudeSettings.customModels, capabilities?.models),
+        ],
+        claudeSettings.customModels,
+      ),
+      capabilities?.effortCapSources ?? [],
     ),
-    capabilities?.effortCapSources ?? [],
+    capabilities?.models,
+    capabilities?.fastModeAvailable,
   );
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
@@ -860,9 +876,12 @@ export const makePendingClaudeProvider = Effect.fn("ClaudeProvider.makePendingCl
     modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
   ): Effect.fn.Return<ServerProviderDraft> {
     const checkedAt = yield* nowIso;
-    const models = claudeProviderModels(
-      modelCatalog.models.map((entry) => entry.model),
-      claudeSettings.customModels,
+    const models = applyClaudeFastModeAvailability(
+      claudeProviderModels(
+        modelCatalog.models.map((entry) => entry.model),
+        claudeSettings.customModels,
+      ),
+      undefined,
     );
 
     if (!claudeSettings.enabled) {

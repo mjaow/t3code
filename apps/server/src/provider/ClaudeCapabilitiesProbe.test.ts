@@ -57,6 +57,8 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
           account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },
           commands: [{ name: "review", description: "Review changes", argumentHint: "[path]" }],
           models: [{ value: "gateway/claude-relay", displayName: "Relay", description: "" }],
+          fast_mode_state: "off",
+          fast_mode_disabled_reason: "sdk_opt_in_required",
         }),
         usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () =>
           new Promise((_, reject) => reject(new Error("usage unavailable"))),
@@ -84,6 +86,7 @@ it.effect("keeps the probe subprocess alive while gateway model discovery can fi
       ["gateway/claude-relay"],
     );
     assert.equal(abortSignal?.aborted, false);
+    assert.equal(capabilities.fastModeAvailable, false);
     yield* TestClock.adjust("3 seconds");
     assert.equal(abortSignal?.aborted, true);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

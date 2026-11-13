@@ -263,6 +263,7 @@ function makeCodexProbeSnapshot(
 ): CodexAppServerProviderSnapshot {
   return {
     version: "1.0.0",
+    accountSpeedTiers: true,
     account: {
       account: {
         type: "chatgpt",
@@ -447,6 +448,23 @@ it.layer(
   Layer.mergeAll(layerTestNodeServices, ServerSettingsModule.layerTest(), layerTestHttpClient),
 )("ProviderRegistry", (it) => {
   describe("checkCodexProviderStatus", () => {
+    it.effect("hides unverified speed tiers even with saved Fast defaults and custom models", () =>
+      Effect.gen(function* () {
+        for (const accountSpeedTiers of [false, undefined, true]) {
+          const status = yield* checkCodexProviderStatus(
+            decodeCodexSettings({ customModels: ["custom-model"] }),
+            () =>
+              Effect.succeed(makeCodexProbeSnapshot({ accountSpeedTiers, serviceTier: "fast" })),
+          );
+          for (const model of status.models) {
+            const fast = model.capabilities?.optionDescriptors?.some(
+              (option) => option.id === "fastMode",
+            );
+            assert.strictEqual(fast, accountSpeedTiers === true && !model.isCustom);
+          }
+        }
+      }),
+    );
     it.effect("uses the app-server account and model list for provider status", () =>
       Effect.gen(function* () {
         const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -1847,55 +1865,66 @@ it.layer(
       });
     });
 
-    it("fills missing capabilities from the previous provider snapshot", () => {
-      const previousProvider = {
-        instanceId: ProviderInstanceId.make("cursor"),
-        driver: ProviderDriverKind.make("cursor"),
-        status: "ready",
-        enabled: true,
-        installed: true,
-        auth: { status: "authenticated" },
-        checkedAt: "2026-04-14T00:00:00.000Z",
-        version: "2026.04.09-f2b0fcd",
-        models: [
-          {
-            slug: "claude-opus-4-6",
-            name: "Opus 4.6",
-            isCustom: false,
-            capabilities: createModelCapabilities({
-              optionDescriptors: [
-                selectDescriptor("reasoning", "Reasoning", [
-                  { id: "high", label: "High", isDefault: true },
-                ]),
-                booleanDescriptor("fastMode", "Fast Mode"),
-                booleanDescriptor("thinking", "Thinking"),
-              ],
-            }),
-          },
-        ],
-        slashCommands: [],
-        skills: [],
-      } as const satisfies ServerProvider;
-      const refreshedProvider = {
-        ...previousProvider,
-        checkedAt: "2026-04-14T00:01:00.000Z",
-        models: [
-          {
-            slug: "claude-opus-4-6",
-            name: "Opus 4.6",
-            isCustom: false,
-            capabilities: createModelCapabilities({
-              optionDescriptors: [],
-            }),
-          },
-        ],
-      } satisfies ServerProvider;
+    it.each(["cursor", "codex", "claudeAgent"])(
+      "fills missing capabilities without reviving unverified speed for %s",
+      (driver) => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make(driver),
+          driver: ProviderDriverKind.make(driver),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          version: "2026.04.09-f2b0fcd",
+          models: [
+            {
+              slug: "claude-opus-4-6",
+              name: "Opus 4.6",
+              isCustom: false,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [
+                  selectDescriptor("reasoning", "Reasoning", [
+                    { id: "high", label: "High", isDefault: true },
+                  ]),
+                  booleanDescriptor("fastMode", "Fast Mode"),
+                  booleanDescriptor("thinking", "Thinking"),
+                ],
+              }),
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-04-14T00:01:00.000Z",
+          models: [
+            {
+              slug: "claude-opus-4-6",
+              name: "Opus 4.6",
+              isCustom: false,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [],
+              }),
+            },
+          ],
+        } satisfies ServerProvider;
 
-      assert.deepStrictEqual(
-        ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).models,
-        [...previousProvider.models],
-      );
-    });
+        assert.deepStrictEqual(
+          ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).models,
+          previousProvider.models.map((model) => ({
+            ...model,
+            capabilities: {
+              ...model.capabilities,
+              optionDescriptors: model.capabilities.optionDescriptors?.filter(
+                (option) => driver === "cursor" || option.id !== "fastMode",
+              ),
+            },
+          })),
+        );
+      },
+    );
 
     it.effect("invalidates model caches only for an explicit model refresh", () =>
       Effect.gen(function* () {

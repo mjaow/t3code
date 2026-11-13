@@ -267,7 +267,9 @@ function getReportedOptionValue(
     !reportedSelection ||
     selection.instanceId !== reportedSelection.instanceId ||
     selection.model !== reportedSelection.model ||
-    selection.options?.some((option) => option.id === id)
+    (id !== "serviceTier" &&
+      id !== "fastMode" &&
+      selection.options?.some((option) => option.id === id))
   )
     return undefined;
   return getRawSelectionValueById(reportedSelection.options, id);
@@ -295,7 +297,20 @@ export function getProviderOptionCurrentValue(
   const hasExplicitOption = selection?.options?.some((option) => option.id === descriptor.id);
   // Reported values are display-only; callers that build dispatch options omit this context.
   const reportedValue = getReportedOptionValue(descriptor.id, selection, reportedSelection);
-  if (reportedValue !== undefined) return reportedValue;
+  if (reportedValue !== undefined) {
+    if (
+      descriptor.id === "serviceTier" &&
+      descriptor.type === "select" &&
+      (reportedValue === "fast" || reportedValue === "priority")
+    ) {
+      return (
+        descriptor.options.find((option) => option.id === reportedValue)?.id ??
+        descriptor.options.find((option) => option.id === "fast" || option.id === "priority")?.id ??
+        reportedValue
+      );
+    }
+    return reportedValue;
+  }
   if (descriptor.id === "variant" && selection && !hasExplicitOption) return undefined;
   if (descriptor.type === "boolean") {
     return descriptor.currentValue;

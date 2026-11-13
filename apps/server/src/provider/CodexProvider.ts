@@ -73,6 +73,7 @@ type CodexRateLimitsProbe =
 
 const CodexRoutingConfig = Schema.Struct({
   model_provider: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  model_catalog_json: Schema.optionalKey(Schema.NullOr(Schema.String)),
   openai_base_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
   model_providers: Schema.optionalKey(
     Schema.Record(
@@ -121,6 +122,19 @@ export const codexRoutesSpendNativeQuota = (
 ): boolean =>
   account.requiresOpenaiAuth && account.account?.type !== "apiKey" && routesToNativeOpenai(config);
 
+export function codexHasAccountSpeedTiers(
+  account: CodexSchema.V2GetAccountResponse,
+  config: unknown,
+): boolean {
+  const routing = decodeCodexRoutingConfig(config);
+  return (
+    account.account?.type === "chatgpt" &&
+    codexRoutesSpendNativeQuota(account, config) &&
+    Option.isSome(routing) &&
+    !routing.value.model_catalog_json
+  );
+}
+
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_CATALOG_REFRESH_TIMEOUT_MS = 3_000;
 const CODEX_CONFIG_PROBE_TIMEOUT_MS = 3_000;
@@ -146,6 +160,7 @@ export interface CodexAppServerProviderSnapshot {
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel> | undefined;
   readonly serviceTier?: string | undefined;
+  readonly accountSpeedTiers?: boolean;
   /** Undefined when `config/read` failed, so T3 cannot know Codex's default program. */
   readonly daybreakEnabled?: boolean | undefined;
   readonly cyberAccessProgramsUnavailable?: boolean | undefined;
@@ -255,13 +270,12 @@ export function mapCodexModelCapabilities(
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
   const serviceTiers =
-    model.serviceTiers && model.serviceTiers.length > 0
-      ? model.serviceTiers
-      : (model.additionalSpeedTiers ?? []).map((id) => ({
-          id,
-          name: id === "fast" ? "Fast" : id,
-          description: "",
-        }));
+    model.serviceTiers ??
+    (model.additionalSpeedTiers ?? []).map((id) => ({
+      id,
+      name: id === "fast" ? "Fast" : id,
+      description: "",
+    }));
   const catalogDefaultServiceTier = serviceTiers.some(
     (tier) => tier.id === model.defaultServiceTier,
   )
@@ -378,6 +392,17 @@ function mapCodexOptionDescriptors(
       },
     };
   });
+}
+
+function accountCodexSpeedOptions(
+  models: ReadonlyArray<ServerProviderModel>,
+  confirmed = false,
+): ReadonlyArray<ServerProviderModel> {
+  return mapCodexOptionDescriptors(models, (descriptors, model) =>
+    confirmed && !model.isCustom
+      ? descriptors
+      : descriptors.filter((option) => option.id !== "serviceTier" && option.id !== "fastMode"),
+  );
 }
 
 function withConfiguredSelectDefault(
@@ -579,12 +604,13 @@ const requestCodexChatGptModels = Effect.fn("requestCodexChatGptModels")(functio
     yield* Effect.logWarning(
       "Codex did not refresh its model catalog in time; using the cached catalog.",
     );
-    return models;
+    return accountCodexSpeedOptions(models);
   }
-  return (
-    (yield* withCodexDiscoveryDeadline(requestAllCodexModels(input.client), input.deadlineMs)) ??
-    models
+  const refreshedModels = yield* withCodexDiscoveryDeadline(
+    requestAllCodexModels(input.client),
+    input.deadlineMs,
   );
+  return refreshedModels ?? accountCodexSpeedOptions(models);
 });
 
 /** Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models. */
@@ -767,6 +793,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     version,
     models,
     serviceTier: config?.service_tier ?? undefined,
+    accountSpeedTiers: codexHasAccountSpeedTiers(accountResponse, config),
     daybreakEnabled: config === undefined ? undefined : cyberAccess?.daybreak === true,
     // An unread config cannot rule out an API key with the programs turned off.
     cyberAccessProgramsUnavailable:
@@ -830,7 +857,7 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
-  appendCustomCodexModels([], codexSettings.customModels);
+  accountCodexSpeedOptions(appendCustomCodexModels([], codexSettings.customModels));
 
 const makePendingCodexProvider = Effect.fn("CodexProvider.makePendingCodexProvider")(function* (
   codexSettings: CodexSettings,
@@ -1059,6 +1086,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     models: pipe(
       appendCustomCodexModels(snapshot.models ?? [], codexSettings.customModels),
       applyPreferredCodexDefaultModel,
+      (models) => accountCodexSpeedOptions(models, snapshot.accountSpeedTiers),
       (models) => applyConfiguredCodexServiceTier(models, snapshot.serviceTier),
       (models) => applyConfiguredCodexCyberAccess(models, snapshot),
     ),

@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import {
   applyPreferredCodexDefaultModel,
   codexRoutesSpendNativeQuota,
+  codexHasAccountSpeedTiers,
   mapCodexModelCapabilities,
 } from "./CodexProvider.ts";
 
@@ -126,6 +127,58 @@ it("uses standard routing when the catalog has no default service tier", () => {
       currentValue: "default",
     },
   ]);
+});
+
+it("does not revive Fast from legacy tiers when the backend returns an empty tier list", () => {
+  const capabilities = mapCodexModelCapabilities({
+    additionalSpeedTiers: ["fast"],
+    serviceTiers: [],
+    defaultServiceTier: "priority",
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: [],
+    description: "Test",
+    displayName: "Test",
+    hidden: false,
+    id: "test",
+    model: "test",
+    isDefault: true,
+  });
+  assert.deepStrictEqual(capabilities.optionDescriptors, []);
+});
+
+it("requires a signed-in native route and an account catalog for speed eligibility", () => {
+  const account = {
+    account: { type: "chatgpt", email: "test@example.com", planType: "plus" },
+    requiresOpenaiAuth: true,
+  } as const;
+  for (const [config, expected] of [
+    [{}, true],
+    [{ model_provider: "openai", model_catalog_json: null }, true],
+    [{ model_catalog_json: "copilot-models.json" }, false],
+    [
+      {
+        model_provider: "github",
+        model_providers: { github: { base_url: "https://api.githubcopilot.com" } },
+      },
+      false,
+    ],
+    [{ openai_base_url: "https://gateway.example" }, false],
+    [undefined, false],
+  ] as const) {
+    assert.strictEqual(codexHasAccountSpeedTiers(account, config), expected);
+  }
+  assert.strictEqual(
+    codexHasAccountSpeedTiers({ ...account, requiresOpenaiAuth: false }, {}),
+    false,
+  );
+  assert.strictEqual(
+    codexHasAccountSpeedTiers({ account: null, requiresOpenaiAuth: true }, {}),
+    false,
+  );
+  assert.strictEqual(
+    codexHasAccountSpeedTiers({ account: { type: "apiKey" }, requiresOpenaiAuth: true }, {}),
+    false,
+  );
 });
 
 it("marks the most preferred available model as default", () => {

@@ -4,6 +4,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { resolveProviderCatalog, type ModelManifestData } from "./ModelManifest.ts";
 import {
   capClaudeCatalogEffort,
+  applyClaudeFastModeAvailability,
   type ClaudeModelCatalog,
   formatClaudeVersionUpgradeMessage,
   getClaudeCatalogModelCapabilities,
@@ -17,6 +18,55 @@ import {
   resolveClaudeUpdateRequiredModels,
   scopeClaudeModelCatalog,
 } from "./ClaudeModelCatalog.ts";
+
+it("offers Claude Fast only for models the current SDK session confirms can use it", () => {
+  const models = [
+    {
+      slug: "claude-test",
+      name: "Test",
+      isCustom: false,
+      aliases: ["test"],
+      capabilities: {
+        optionDescriptors: [
+          { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: true },
+        ],
+      },
+    },
+  ] as const;
+  for (const [available, reported, expected] of [
+    [undefined, undefined, false],
+    [
+      false,
+      [{ value: "test", displayName: "Test", description: "", supportsFastMode: true }],
+      false,
+    ],
+    [true, [{ value: "test", displayName: "Test", description: "" }], false],
+    [
+      true,
+      [{ value: "other", displayName: "Other", description: "", supportsFastMode: true }],
+      false,
+    ],
+    [
+      true,
+      [
+        {
+          value: "test",
+          resolvedModel: "claude-test[1m]",
+          displayName: "Test",
+          description: "",
+          supportsFastMode: true,
+        },
+      ],
+      true,
+    ],
+  ] as const) {
+    const result = applyClaudeFastModeAvailability(models, reported, available);
+    assert.strictEqual(
+      result[0]?.capabilities?.optionDescriptors?.some((option) => option.id === "fastMode"),
+      expected,
+    );
+  }
+});
 
 const manifest = (): ModelManifestData => ({
   version: 1,

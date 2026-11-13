@@ -20,12 +20,12 @@ jobs:
     timeout-minutes: 45
     env:
       T3CODE_TELEMETRY_CHANNEL: dev
-      T3CODE_DISABLE_AUTO_UPDATE: 'true'
+      T3CODE_DISABLE_AUTO_UPDATE: "true"
     steps:
       - name: Checkout source
         shell: bash
         env:
-          GIT_TERMINAL_PROMPT: '0'
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
           git init .
@@ -37,6 +37,30 @@ jobs:
       - uses: ./.github/actions/setup-ci-deps
         with:
           install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Verify provider speed regressions
+        shell: pwsh
+        run: |
+          Push-Location packages/client-runtime
+          vp test run src/modelTraits.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          Push-Location packages/shared
+          vp test run --config ../../vite.config.ts src/model.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          Push-Location apps/server
+          vp test run src/provider/CodexProvider.test.ts src/provider/ClaudeModelCatalog.test.ts src/provider/ClaudeCapabilitiesProbe.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          vp test run src/provider/ProviderRegistry.test.ts -t 'unverified speed|reviving unverified|app-server account and model list'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+
+      - name: Check provider speed types
+        shell: pwsh
+        run: |
+          vp run --filter t3 --filter @t3tools/shared --filter @t3tools/client-runtime typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify packaging regression and fix
         shell: pwsh
