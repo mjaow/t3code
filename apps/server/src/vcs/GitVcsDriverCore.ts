@@ -2332,7 +2332,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         options?.includeBranchChanges
           ? readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName, {
               knownOriginDefaultBranch: defaultBranch,
-              untrackedRoots,
+              untrackedRoots: statusResult.stdoutTruncated ? undefined : untrackedRoots,
             }).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.undefined,
       ],
@@ -3240,7 +3240,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     branch: string | null,
     options?: {
       readonly knownOriginDefaultBranch: string | null;
-      readonly untrackedRoots: ReadonlyArray<string>;
+      readonly untrackedRoots: ReadonlyArray<string> | undefined;
     },
   ) {
     const resolved = yield* resolveReviewMergeBase(
@@ -3260,8 +3260,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       roots.length <= 128 && roots.reduce((length, root) => length + root.length + 16, 0) < 8_000
         ? roots.map((root) => `:(top,literal)${root}`)
         : [];
-    // Empty status can mean untracked files are hidden; retain the full scan.
-    const untracked = yield* prepareUntrackedReviewIndex(cwd, pathspecs);
+    // Hidden untracked files need discovery; a complete empty status needs no second scan.
+    const untracked =
+      options?.untrackedRoots !== undefined &&
+      roots.length === 0 &&
+      (yield* readConfigValue(cwd, "status.showUntrackedFiles")) !== "no"
+        ? { env: undefined }
+        : yield* prepareUntrackedReviewIndex(cwd, pathspecs);
     if (untracked === null) {
       return yield* new GitCommandError({
         operation: "GitVcsDriver.readBranchChangeTotals",

@@ -907,6 +907,59 @@ export const layer = Layer.effect(
           if (reason !== null) return yield* new WebhookDeliverySkipped({ reason });
         }
 
+        if (
+          trigger === "scheduled" &&
+          active.schedule.type === "interval" &&
+          active.threadId !== null
+        ) {
+          const pendingRuns = yield* threadManagement
+            .getThreadRecords(ThreadId.make(active.threadId), ["runs"], {
+              runStatuses: ["preparing", "queued", "starting", "running", "waiting"],
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                taskError("Could not read pending scheduled runs.", { taskId: active.id, cause }),
+              ),
+            );
+          const pendingMessages =
+            pendingRuns.runs.length === 0
+              ? []
+              : (yield* threadManagement
+                  .getThreadRecords(ThreadId.make(active.threadId), ["messages"], {
+                    messageIds: pendingRuns.runs.map((run) => run.userMessageId),
+                    messageRoles: ["user"],
+                  })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      taskError("Could not read pending scheduled messages.", {
+                        taskId: active.id,
+                        cause,
+                      }),
+                    ),
+                  )).messages;
+          if (
+            pendingMessages.some(
+              (message) => message.scheduledTaskId === active.id && message.text === active.prompt,
+            )
+          ) {
+            // Interval polls describe current state; duplicate outstanding polls add no work.
+            yield* sql`UPDATE scheduled_tasks
+              SET next_run_at = ${nextRunAt(active, startedAt)}, updated_at = ${startedAtIso}
+              WHERE task_id = ${active.id} AND created_at = ${active.createdAt}
+                AND next_run_at = ${active.nextRunAt} AND enabled = 1`.pipe(
+              Effect.mapError((cause) =>
+                taskError("Could not defer pending scheduled check.", { taskId: active.id, cause }),
+              ),
+            );
+            yield* notifyChanged;
+            return {
+              task: (yield* findTask(active.id)) ?? active,
+              threadId: null,
+              dispatchFailed: false,
+            };
+          }
+        }
+
         if (webhook === undefined) yield* markRunning(active.id, startedAtIso);
         else
           yield* sql

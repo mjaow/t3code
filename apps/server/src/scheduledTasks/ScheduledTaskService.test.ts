@@ -76,6 +76,98 @@ const insertRow = (
     run_count: 0,
   })}`;
 
+it.effect("coalesces interval checks until their pending run settles", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-12T10:00:00Z"));
+    const taskId = ScheduledTaskId.make("task:coalesced-check");
+    const threadId = ThreadId.make("thread:coalesced-check");
+    let tick = Effect.void;
+    let pending = true;
+    let sameTask = true;
+    let samePrompt = true;
+    let sends = 0;
+    const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
+      ManagedPolicy.layerTest(),
+      Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+      }),
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(threadShell(ProjectId.make("project:test"))),
+        getThreadRecords: (_threadId, fields) =>
+          Effect.succeed(
+            (fields.some((field) => field === "runs")
+              ? { runs: pending ? [{ userMessageId: "pending-message" }] : [] }
+              : {
+                  messages: [
+                    {
+                      role: "user",
+                      scheduledTaskId: sameTask ? taskId : "task:other",
+                      text: samePrompt ? "Check progress" : "Different instructions",
+                    },
+                  ],
+                }) as never,
+          ),
+        sendToThread: () =>
+          Effect.sync(() => {
+            sends++;
+            return {} as never;
+          }),
+      }),
+      Layer.succeed(Scheduler.Scheduler, {
+        register: <E, R>(_name: string, work: Effect.Effect<void, E, R>) =>
+          Effect.context<R>().pipe(
+            Effect.map((context) => {
+              tick = work.pipe(Effect.provideContext(context), Effect.orDie);
+            }),
+          ),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert({
+        id: taskId,
+        title: "Check",
+        prompt: "Check progress",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        threadId,
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* tick;
+      assert.equal(sends, 0);
+      const deferred = (yield* service.list()).tasks[0]!;
+      assert.equal(deferred.nextRunAt, "2026-11-12T10:02:00.000Z");
+      assert.equal(deferred.runCount, 0);
+      // Manual runs remain explicit requests even when an automatic check is pending.
+      yield* service.runNow({ id: taskId });
+      assert.equal(sends, 1);
+      pending = false;
+      yield* TestClock.adjust("1 minute");
+      yield* tick;
+      assert.equal(sends, 2);
+      pending = true;
+      sameTask = false;
+      yield* TestClock.adjust("1 minute");
+      yield* tick;
+      assert.equal(sends, 3);
+      sameTask = true;
+      samePrompt = false;
+      yield* TestClock.adjust("1 minute");
+      yield* tick;
+      assert.equal(sends, 4);
+    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("loads only due tasks and skips corrupt due rows without decoding settled tasks", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
